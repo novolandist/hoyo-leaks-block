@@ -133,7 +133,7 @@ class BaseConfigManager {
    * 从云端获取默认配置
    */
   async fetchRemoteDefaultConfig() {
-    const url = 'https://raw.githubusercontent.com/kaedei/hoyo-leaks-block/refs/heads/main/config/default-v1.json';
+    const url = 'https://raw.githubusercontent.com/novolandist/hoyo-leaks-block/refs/heads/main/config/default-v1.json';
 
     try {
       const response = await fetch(url);
