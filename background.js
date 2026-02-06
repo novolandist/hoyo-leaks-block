@@ -87,10 +87,7 @@ chrome.runtime.onStartup.addListener(() => {
 
 // 扩展启动时也执行检查（用于开发和首次安装）
 chrome.runtime.onInstalled.addListener(async (details) => {
-  const defaultConfig = APP_CONSTANTS.DEFAULT_CONFIG;
-
-  // 设置默认配置
-  chrome.storage.sync.set(defaultConfig);
+  DebugLogger.log(`[HoyoBlock-Background] onInstalled triggered with reason: ${details.reason}`);
 
   // 初始化统计数据
   const today = new Date().toDateString();
@@ -105,6 +102,18 @@ chrome.runtime.onInstalled.addListener(async (details) => {
   // 获取并设置默认区域列表
   fetchDefaultAreaList();
 
+  // 根据触发原因处理配置
+  if (details.reason === 'install') {
+    // 首次安装：设置默认配置
+    DebugLogger.log('[HoyoBlock-Background] First installation, setting default config');
+    const defaultConfig = APP_CONSTANTS.DEFAULT_CONFIG;
+    chrome.storage.sync.set(defaultConfig);
+  } else if (details.reason === 'update') {
+    // 更新：只合并默认配置，不覆盖用户数据
+    DebugLogger.log('[HoyoBlock-Background] Extension updated, merging default config with existing user data');
+    await mergeDefaultConfigWithExisting();
+  }
+
   // 如果是首次安装或更新，尝试从云端获取默认规则
   if (details.reason === 'install' || details.reason === 'update') {
     await fetchAndMergeRemoteRules();
@@ -113,6 +122,91 @@ chrome.runtime.onInstalled.addListener(async (details) => {
   // 执行自动更新检查
   await checkAutoUpdateOnStartup();
 });
+
+// 合并默认配置到现有配置（不覆盖用户数据）
+async function mergeDefaultConfigWithExisting() {
+  try {
+    DebugLogger.log('[HoyoBlock-Background] Merging default config with existing user data...');
+
+    // 获取当前配置
+    const currentConfig = await new Promise((resolve) => {
+      chrome.storage.sync.get(null, (result) => {
+        resolve(result);
+      });
+    });
+
+    // 创建配置管理器实例
+    const configManager = new BaseConfigManager();
+    configManager.config = currentConfig;
+    configManager.initConfigStructure();
+
+    // 获取默认配置
+    const defaultConfig = APP_CONSTANTS.DEFAULT_CONFIG;
+
+    // 合并配置：只添加默认配置中不存在的键，不覆盖现有值
+    const mergedConfig = { ...currentConfig };
+
+    // 合并 blockRules（只添加新规则，不覆盖现有规则）
+    if (defaultConfig.blockRules) {
+      const platforms = ['bilibili', 'youtube', 'twitter'];
+      const ruleTypes = ['keywords', 'blacklist', 'whitelist'];
+
+      platforms.forEach(platform => {
+        if (defaultConfig.blockRules[platform]) {
+          ruleTypes.forEach(ruleType => {
+            if (defaultConfig.blockRules[platform][ruleType]) {
+              // 如果当前配置中没有这个平台或规则类型，初始化为空数组
+              if (!mergedConfig.blockRules) {
+                mergedConfig.blockRules = {};
+              }
+              if (!mergedConfig.blockRules[platform]) {
+                mergedConfig.blockRules[platform] = { keywords: [], blacklist: [], whitelist: [] };
+              }
+              if (!mergedConfig.blockRules[platform][ruleType]) {
+                mergedConfig.blockRules[platform][ruleType] = [];
+              }
+
+              // 合并规则：只添加默认配置中不存在的规则
+              const defaultRules = defaultConfig.blockRules[platform][ruleType];
+              const currentRules = mergedConfig.blockRules[platform][ruleType];
+
+              defaultRules.forEach(rule => {
+                if (!currentRules.includes(rule)) {
+                  currentRules.push(rule);
+                }
+              });
+            }
+          });
+        }
+      });
+    }
+
+    // 合并其他配置项（只添加默认配置中不存在的键）
+    const configKeysToMerge = ['autoUpdateEnabled', 'autoUpdateInterval', 'showIndicator'];
+    configKeysToMerge.forEach(key => {
+      if (defaultConfig[key] !== undefined && mergedConfig[key] === undefined) {
+        mergedConfig[key] = defaultConfig[key];
+      }
+    });
+
+    // 保存合并后的配置
+    await new Promise((resolve, reject) => {
+      chrome.storage.sync.set(mergedConfig, () => {
+        if (chrome.runtime.lastError) {
+          console.error('[HoyoBlock-Background] Error saving merged config:', chrome.runtime.lastError);
+          reject(new Error(chrome.runtime.lastError.message));
+        } else {
+          DebugLogger.log('[HoyoBlock-Background] Merged config saved successfully');
+          resolve();
+        }
+      });
+    });
+
+    DebugLogger.log('[HoyoBlock-Background] Config merge completed');
+  } catch (error) {
+    console.error('[HoyoBlock-Background] Error merging default config:', error);
+  }
+}
 
 // 监听来自content script的消息
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
